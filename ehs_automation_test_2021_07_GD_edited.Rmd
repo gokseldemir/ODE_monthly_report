@@ -1,0 +1,1059 @@
+---
+title: "ehs_automation_pilot"
+author: "Goksel"
+date: "2/26/2021"
+output: powerpoint_presentation
+params: 
+  current_year: 2022 
+  folder_loc: "2021.06"
+  start_year: 2018
+  end_date_label: "April 30, 2021"
+  start_date_label: "January 1, 2018"
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = FALSE, message = FALSE)
+```
+
+```{r load_packages, include=FALSE, message=FALSE}
+library(tidyverse)
+library(scales)
+library(epitools)
+library(odbc)
+library(dbplyr)
+library(lubridate)
+library(broom)
+library(ggrepel)
+library(flextable)
+library(lubridate)
+library(gridExtra)
+library(RColorBrewer)
+library(here)
+library(viridis)
+```
+
+
+```{r charting_standards, include=FALSE, echo=FALSE}
+standards <- theme_classic() + 
+  theme(axis.text.x = element_text(size = 16), 
+        axis.text.y = element_text(size = 16), 
+        legend.text = element_text(size = 15), 
+        panel.grid.major = element_blank(), 
+        panel.grid.minor=element_blank(),
+        axis.title = element_text(size=16),
+        legend.title = element_blank())
+
+format_dates <- function(x) {
+  months <-  month(x, label = T, abbr=T)            
+  years <- lubridate::year(x) 
+  
+  if_else(is.na(lag(years)) | lag(years) != years,  
+          true = paste(years, months, sep = " - "), 
+          false = paste(months))
+}
+
+format_dates_q <- function(x) {
+  quarters <-  paste0("Q", quarter(x))            
+  years <- lubridate::year(x) 
+  
+  if_else(is.na(lag(years)) | lag(years) != years,  
+          true = paste(years, quarters, sep = " - "), 
+          false = paste(quarters))
+}
+
+
+format_dates_m_q <- function(x, x_unit) {
+  if(x_unit == "month") {
+  paste_unit <-  month(x, label = T, abbr=T)   
+  } else { 
+    paste_unit <- paste0("Q", quarter(x))}
+  years <- lubridate::year(x) 
+  
+  
+  if_else(is.na(lag(years)) | lag(years) != years,  
+          true = paste(years, paste_unit, sep = " - "), 
+          false = paste(paste_unit))
+}
+
+
+#for subtitles for everychart
+date_range_labels <- paste(params$start_date_label, "-", params$end_date_label)
+```
+
+
+
+```{r sql_connect, include=FALSE, results='hide', echo=FALSE}
+
+dbhandle <- dbConnect(odbc(), driver="ODBC Driver 17 for SQL Server", server="FNHADW", database="CHWSDM", Trusted_Connection = "yes")
+tester <- tbl(dbhandle, in_schema("dbo", "BCEHS"))
+
+bcehs1 <- as_tibble(tester) %>% 
+  mutate(ha_name = ifelse(DERIVED_HA == 1, "Interior", 
+                                 ifelse(DERIVED_HA == 2, "Fraser", 
+                                        ifelse(DERIVED_HA == 3, "Vancouver Coastal", 
+                                               ifelse(DERIVED_HA ==4, "Vancouver Island", 
+                                                      ifelse(DERIVED_HA == 5, "Northern", "Unknown"))))), 
+         ha_colour = ifelse(DERIVED_HA == 1, "#F04B52", 
+                                 ifelse(DERIVED_HA == 2, "#2C97A7", 
+                                        ifelse(DERIVED_HA == 3, "#F57E20", 
+                                               ifelse(DERIVED_HA ==4, "#00A14B", 
+                                                      ifelse(DERIVED_HA == 5, "#8ACAE2", "grey"))))),
+                FirstNations = ifelse(FN_FLAG == 1, "first_nations", "other_residents"),
+                DATEOFSERV = ymd(DATE_SERVICE),
+                month = month(DATE_SERVICE),
+                month_lab = month(DATE_SERVICE, label = T),
+                year_mm = floor_date(DATE_SERVICE, unit="month"),
+                week=week(DATE_SERVICE),
+                year=year(DATE_SERVICE),
+                age_group = ifelse(PAT_AGE >=0 & PAT_AGE <20, "<20",
+                             ifelse(PAT_AGE >=20  &  PAT_AGE <=29, "20-29",
+                              ifelse(PAT_AGE>=30 &  PAT_AGE<=39, "30-39",
+                               ifelse(PAT_AGE >=40 &  PAT_AGE<= 49, "40-49",
+                                ifelse(PAT_AGE >=50 &  PAT_AGE<= 59, "50-59",
+                                 ifelse(PAT_AGE >=60 , "60+", "Unknown")))))),
+         phn_flag_update = ifelse(PHN_FLAG == "N" & is.na(MATCHED_FLAG)==T, "N",  
+                                  ifelse(PHN_FLAG == "N" & MATCHED_FLAG == "1", "Y", "Y")))
+
+##match_flag <- read_csv(file=here("2021.01", "202012_Match Flag.csv")) %>% 
+##  rename(MOH_EVENT_NUM_STUDYID = MOH_EVENT_NUM__STUDYID) %>% 
+##  mutate(MOH_STUDYID = as.character(MOH_STUDYID))
+
+
+##match_flagb <- match_flag %>% 
+  ##select(-PHN_FLAG) %>% 
+  ##unique() %>% 
+  ##filter(MATCHED_FLAG == "Y")
+
+
+##bcehs1b<- bcehs1 %>% unique() %>% 
+  ##left_join(match_flagb, by=c("MOH_EVENT_NUM_STUDYID", "MOH_STUDYID"))
+
+
+
+bcehs2 <- bcehs1 %>%
+  filter(OD_GROUP=="Probable_OD_opioid") %>% 
+  arrange(MOH_STUDYID, DATE_SERVICE) %>% 
+  filter(PAT_EVENT_INDEX ==1)
+
+flag_check <- bcehs2 %>% select(MOH_STUDYID, MATCHED_FLAG, PHN_FLAG, phn_flag_update)
+
+```
+
+bcehs_april <- bcehs2 %>%
+filter(FN_FLAG == 0) %>%
+filter(year_mm >= "2020-06-01") %>%
+filter(year_mm <  "2021-06-01") %>%
+group_by(DERIVED_HA,PAT_GENDER) %>%
+summarize(total = n()) %>%
+mutate(percent=total/sum(total) * 100)
+
+bcehs_april
+
+class(bcehs1$year_mm)
+length(bcehs1$year_mm)
+bcehs1$year_mm
+
+bcehs_April_OR <- bcehs2 %>%
+filter(FN_FLAG == 0) %>%
+filter(year_mm >= "2021-04-01") %>%
+filter(year_mm <  "2021-05-01") 
+bcehs_April_OR
+
+bcehs_LHA322 <- bcehs2 %>%
+filter(FN_FLAG == 1) %>%
+filter(year_mm >= "2021-04-01") %>%
+filter(year_mm <  "2021-05-01") %>%
+group_by(DERIVED_LHA) %>%
+dplyr::summarize(total = n())
+
+bcehs_LHA322
+
+
+```{r phn_monthly, include=FALSE}
+#############PHN_Flag_number
+phn_flag_num <- bcehs2 %>%
+  group_by(phn_flag_update) %>%
+  dplyr::summarise(total= n()) %>% 
+  mutate(percent=round(total/sum(total)*100, digits=3))
+
+############PHN_Flag_Num&Percent by Year
+phn_flag_year <- bcehs2 %>%
+  group_by(year, phn_flag_update) %>%  
+  dplyr::summarise(total =n()) %>%
+  mutate(percent=round(total/sum(total)*100, digits=3))
+
+###########PHN_Flag_Num&Percent by Month
+phn_flag_month <- bcehs2 %>%
+  group_by(year_mm, year, month_lab, phn_flag_update) %>%
+  dplyr::summarise(total =n()) %>%
+  mutate(percent=round(total/sum(total)*100, digits=3))
+
+avg_phn_completeness_cy <- bcehs2 %>%
+  group_by(year, phn_flag_update) %>%
+  dplyr::summarise(total =n_distinct(MOH_PAT_EVENT_STUDYID)) %>%
+  mutate(percent=round(total/sum(total)*100, digits=3))
+
+```
+
+## Quality Checks PHN Completeness 
+
+```{r plot_phn_month}
+phn_flag_month %>% filter(year_mm >= ymd("2018-01-01") & phn_flag_update == "Y") %>%
+   ggplot(aes(year_mm, percent, fill=phn_flag_update)) +
+  #geom_line()  +
+  geom_bar(stat="identity", position= "dodge") + 
+  geom_text(aes(label=paste0(round(percent,  digits = 1), "%", "\n","n=", total)), size = 3, nudge_y = 5) + 
+  scale_x_date(labels = format_dates, date_breaks = "1 months", expand=c(0,0)) +
+  scale_y_continuous(limits =c(0, 100))+
+  standards+
+  theme_classic()+
+  #facet_wrap(.~year, scales = "free") +
+  #scale_fill_manual(values = c("darkorange1", "skyblue4"), name=NULL, labels = c( "No", "Yes")) + 
+  theme(plot.title = element_text(size = 17), 
+        axis.text.x = element_text(angle=45,hjust=1, size=15),
+        axis.text.y = element_text(size=15),
+        legend.position = "none")+
+  #scale_y_continuous(limits = c(0, 100),) + 
+  labs(title = "PHN Completeness by Month",
+       subtitle = paste(params$start_date_label, "-", params$end_date_label),
+        x = "Month",  y = "PHN Completeness")
+
+#ggsave(here(params$folder_loc, "phn_monthly_complete.jpeg"), width = 16, height = 6)
+```
+
+
+
+## Slide with Bullets
+
+- Bullet 1
+- Bullet 2
+- Bullet 3
+
+## Slide with R Output
+
+```{r phn_sex}
+###Figure 2. PHN completeness by  Sex & Month (2020 only)
+phn_flag_month_sex2 <- bcehs2 %>%
+  filter(PAT_GENDER != "NA" #& PHN_FLAG == "Y")
+           ) %>% 
+  mutate(PAT_GENDER = fct_relevel(PAT_GENDER, "Male", "Female", "Unknown")) %>% 
+  dplyr::group_by(year, phn_flag_update, PAT_GENDER) %>% 
+  dplyr::summarise(total = n()) %>%  
+  dplyr::mutate(percent = 100*total/sum(total))
+         #ylabs = as.character(ifelse(n_quarters < 1, paste0(DATEOFDEATH_YEAR, "*"), DATEOFDEATH_YEAR)), 
+         #n_quarters = (ifelse(n_quarters < 0.5, 0.43, n_quarters))
+          
+PHN <- c(Y = "Yes",N ="No", data(phn_flag_month_sex2))
+
+phn_flag_month_sex2 %>% 
+  ggplot(aes(year, percent, fill = PAT_GENDER)) + 
+  geom_bar(stat = "identity", position = "fill") + #make bars and make them side by side 
+  scale_fill_manual(values = (c("lightgoldenrod1", "slateblue4")), guide=guide_legend(reverse = F)) + 
+  facet_grid(.~phn_flag_update, labeller=labeller(PHN)) +
+  standards +
+  geom_text(aes(label=paste0(round(percent, digits = 1), "%", "\n", "n=", total)), 
+            position = position_fill(vjust = 0.5), 
+            size = 4, 
+            colour=ifelse(subset(phn_flag_month_sex2, PAT_GENDER != "NA")$PAT_GENDER == "F", "black", "gray"))+
+  theme(strip.background = element_rect(fill="white"), 
+        strip.text.x = element_text(size = 14, color = "black", face = "bold")) + 
+  labs(title = "PHN Completeness by Year & Sex", 
+       subtitle=paste(params$start_date_label, "-", params$end_date_label),
+        x = "Year",  y = "Percentage") + 
+  scale_y_continuous(labels = scales::percent, breaks = seq(0, 1, by = 0.25))
+
+#ggsave(here(params$folder_loc,"phn_sex.jpeg"))
+
+```
+
+## Slide with Plot
+
+```{r phn_age }
+phn_flag_yr_age <- bcehs2 %>% 
+  filter(!is.na(age_group)) %>% 
+  mutate(age_group = fct_relevel(age_group, "<20", "20-29", "30-39", "40-49", "50-59","60+")) %>% 
+  dplyr::group_by(year,phn_flag_update, age_group) %>% 
+ dplyr::summarise(total = n(),
+            #n_quarters = n_distinct(month)/12
+            ) %>%  
+  dplyr::mutate(percent = 100*total/sum(total))
+         #ylabs = as.character(ifelse(n_quarters < 1, paste0(DATEOFDEATH_YEAR, "*"), DATEOFDEATH_YEAR)), 
+         #n_quarters = (ifelse(n_quarters < 0.5, 0.43, n_quarters))
+        
+Age <- c("<20","20-29", "30-39", "40-49", "50-59","60+")
+
+phn_flag_yr_age %>%
+  ggplot(aes(year, percent, fill = age_group)) + 
+  geom_bar(stat = "identity", position = "fill") +
+  scale_fill_brewer((palette = "Blue"), guide=guide_legend(reverse = F)) + 
+  facet_grid(.~phn_flag_update, labeller=labeller(PHN)) + 
+  standards +  
+  geom_text(aes(label=paste0(round(percent,  digits = 1), "%", "\n")), position = position_fill(vjust = 0.5), size = 2) +
+  theme(legend.position =  "right", 
+        strip.background = element_rect(fill="white"), 
+        strip.text.x = element_text(size = 14, color = "black", face = "bold")) + 
+  labs(title = "Figure 3. PHN Completeness by Year & Age Group", 
+       subtitle=paste(params$start_date_label, "-", params$end_date_label),
+        x = "Year",  y = "Percentage") + 
+  scale_y_continuous(labels = scales::percent, breaks = seq(0, 1, by = 0.25))
+```
+
+```{r age_yr_side, fig.width=12}
+phn_flag_yr_age %>% 
+  filter(year >= 2020) %>% 
+   ggplot(aes(age_group, percent, fill=phn_flag_update)) +
+  geom_bar(stat="identity", position= "dodge") + scale_fill_manual(values = c("#6698FF", "#153E7E"))+ #facet_grid(.~PHN_FLAG, labeller=labeller(PHN))+
+  facet_wrap(year ~ . ) +#geom_text(aes(label = round(percent, digits =1)))
+  geom_text(aes(label=paste0(round(percent, digits = 1), "%", "\n","n=", total)), position=position_dodge(width=1), size = 4, vjust = -.2)+ 
+  standards+
+  theme(legend.position =  "bottom", 
+        strip.background = element_rect(fill="white"), 
+        strip.text.x = element_text(size = 14, color = "black", face = "bold"), 
+        legend.title = element_blank()) + 
+  scale_y_continuous(limits = c(0, 50)) + 
+    labs(title = "Figure 3. PHN Completeness by Year & Age Group", 
+       subtitle=paste(params$start_date_label, "-", params$end_date_label),
+        x = "Age Group",  y = "Percentage")
+
+# ggsave(here(params$folder_loc, "phn_age_yr.jpeg"), width=14)
+
+```
+
+```{r by_age_group_phn}
+phn_flag_year_age2 <- bcehs2 %>% 
+  filter(age_group != "NA") %>% 
+  mutate(age_group = fct_relevel(age_group, "<20", "20-29", "30-39", "40-49", "50-59","60+")) %>% 
+  dplyr::group_by(year, age_group, phn_flag_update) %>% 
+ dplyr::summarise(total = n(),
+            ) %>%  
+  dplyr::mutate(percent = 100*total/sum(total))
+         #ylabs = as.character(ifelse(n_quarters < 1, paste0(DATEOFDEATH_YEAR, "*"), DATEOFDEATH_YEAR)), 
+         #n_quarters = (ifelse(n_quarters < 0.5, 0.43, n_quarters))
+        
+phn_flag_year_age2 %>% 
+  filter(year >= 2020) %>% 
+     ggplot(aes(age_group, percent, fill=phn_flag_update)) +
+  geom_bar(stat="identity", position= "dodge") + scale_fill_manual(values = c("#6698FF", "#153E7E"))+ #facet_grid(.~PHN_FLAG, labeller=labeller(PHN))+
+  facet_wrap(year ~ . ) +#geom_text(aes(label = round(percent, digits =1)))
+  geom_text(aes(label=paste0(round(percent, digits = 1), "%", "\n","n=", total)), position=position_dodge(width=1), size = 3, vjust = -0.2)+ 
+  theme(legend.title = element_blank()) +
+  standards+
+  theme(legend.position =  "bottom", 
+        strip.background = element_rect(fill="white"), 
+        strip.text.x = element_text(size = 14, color = "black", face = "bold")) + 
+  #theme(legend.position = "none") + 
+  scale_y_continuous(limits = c(0, 100)) + 
+    labs(title = "Figure 3. PHN Completeness by Year & Age Group", 
+       subtitle=paste(params$start_date_label, "-", params$end_date_label),
+       x = "Age Group",  y = "Percentage")
+
+#ggsave(here(params$folder_loc, "phn_BY_age_yr.jpeg"), width=14)
+
+```
+
+```{r by_ha_phn}
+phn_flag_year_HA2 <- bcehs2 %>% 
+  filter(ha_name != "Unknown") %>% 
+  dplyr::group_by(year, ha_name, phn_flag_update) %>% 
+  dplyr::summarise(total = n()
+            ) %>%  
+  dplyr::mutate(percent = 100*total/sum(total))
+
+phn_flag_year_HA2 %>% 
+  filter(year >=2020) %>% 
+   ggplot(aes(ha_name, percent, fill=phn_flag_update)) + geom_bar(stat="identity", position= "dodge")+ scale_fill_manual(values = c("#6698FF", "#153E7E"))+
+   geom_text(aes(label=paste0(round(percent, digits = 1), "%", "\n","n=", total)), position=position_dodge(width=1), vjust = -0.2, size = 4) +
+  standards+ 
+  facet_wrap(year ~.) +
+   theme(legend.position =  "bottom", 
+        strip.background = element_rect(fill="white"), 
+        strip.text.x = element_text(size = 14, color = "black", face = "bold"), 
+        axis.text.x = element_text(angle=45, hjust=1)) +
+scale_y_continuous(limits = c(0, 100)) + theme(legend.title = element_blank()) +
+   labs(title = "PHN Completeness by Health Authority",
+        subtitle=paste(params$start_date_label, "-", params$end_date_label),
+        x = "Healthy Authority",  y = "PHN Completeness") 
+
+#ggsave(here(params$folder_loc, "phn_BY_ha_yr.jpeg"), width=8, height=7)
+
+```
+
+```{r monthly_overdoses}
+
+
+###################################
+# calculating od events number among FNS and ORs
+od_event <- bcehs2 %>%  #filter(year >= "2018") %>%
+   group_by(year_mm, FN_FLAG) %>% 
+ # mutate(FN_FLAG = fct_relevel(FN_FLAG, "1")) %>%  
+  dplyr::summarise(total = n()) %>% 
+  mutate(monthly_total=sum(total))
+
+
+FN_labels <- c("0" = "Other Residents", "1" ="First Nations")
+
+#flag_dates <- seq(min(od_event$year_mm), max(od_event$year_mm), by = '1 month')
+#od_event <- od_event %>% 
+ # mutate(text_labels = ifelse(year_mm %in% flag_dates | year_mm == max(od_event$year_mm), total, NA))
+
+
+FN_labels <- c("0" = "Other Residents", "1" ="First Nations")
+
+pan_label <- tibble(FN_FLAG = c(0, 1), covid_label = ifelse(FN_FLAG == 0, "Covid-19 Pandemic", NA), x = ymd("2020-03-01"),  y = ifelse(FN_FLAG== 0, max(od_event$total)+250, NA))
+
+od_event %>% 
+  filter(FN_FLAG ==0) %>% 
+  ggplot(aes(x=year_mm, y=total,group=FN_FLAG, fill=FN_FLAG)) + geom_bar(stat="identity", position= "dodge")+
+  geom_vline(xintercept = ymd("2020-03-01"),linetype="dotted", color = "black", size=1)+ 
+  geom_label(data=pan_label, aes(label=covid_label, x=x, y=y), fill="white", size=4) +
+  geom_text(aes(label=total), size=4, vjust=-0.75, color="black", size=4)+
+ # facet_grid(FN_FLAG~., scales ="free", labeller=labeller(FN_FLAG=FN_labels)) +
+  theme(strip.background = element_blank(),
+        strip.text.y = element_blank(), axis.text.y = element_blank())+ 
+  standards + 
+  scale_fill_manual(values = c("skyblue4", "darkorange1"))+ 
+  theme(legend.position = "none")+
+  scale_x_date(labels = format_dates, date_breaks = "1 months",  expand=c(0.015, 0.015))+
+  theme(axis.text.x = element_text(angle=90,vjust=1), 
+        plot.title = element_text(size = 16)) + 
+  labs(title = paste("Number of Overdose Events among Other Residents by Month","\n", " Jan.1.2018 - Dec.31, 2020"), 
+       x = "Month-Year",  y = "Number of Overdose Events")
+
+ggsave(here(params$folder_loc, "od_events_by_yr_mth_other_res.jpeg"), width=12)
+
+
+```
+
+```{r}
+
+od_prop_complete<- bcehs2 %>% 
+  filter(phn_flag_update == "Y") %>%
+  group_by(year_mm, FN_FLAG) %>%
+  dplyr::summarise(total_od = n()) %>%
+    mutate(proportion = round((total_od/sum(total_od)), digits =3), 
+            percent=round((total_od/sum(total_od))*100, digits=1))
+
+flag_dates <- seq(min(od_prop_complete$year_mm), max(od_prop_complete$year_mm), by = '2 month')
+
+od_prop_complete <- od_prop_complete %>% 
+  mutate(text_labels = ifelse(year_mm %in% flag_dates | year_mm == max(od_prop_complete$year_mm), percent, NA), 
+         text_pos_x = ifelse(year_mm %in% flag_dates, 0, 
+                             ifelse(year_mm == max(od_prop_complete$year_mm), 1, 
+                                    NA)))
+
+pan_label <- tibble(FN_FLAG = c(0, 1), 
+                    covid_label = ifelse(FN_FLAG == 0, "Covid-19 Pandemic", NA), 
+                    x = ymd("2020-03-01"),  
+                    y = 2.5*max(od_prop_complete$proportion[od_prop_complete$FN_FLAG ==1]))
+
+od_prop_complete %>% filter(FN_FLAG == "1") %>%
+  ggplot(aes(x=year_mm, y=proportion, group=FN_FLAG)) +
+  geom_point(size =1.3, aes(colour=FN_FLAG))+
+ geom_line(aes(color=FN_FLAG), size=1.1)+
+  scale_color_manual(values = c("darkorange1"), name=NULL, labels = c("First Nations"))+ 
+  standards +
+  geom_vline(xintercept = ymd("2020-03-01"),linetype="dotted", color = "black", size=1) +
+  geom_label(data=pan_label, aes(label=covid_label, x=x, y=y), fill="white") +
+  scale_y_continuous(labels = scales::percent, limits = c(0, max(pan_label$y))) + 
+  scale_x_date(labels = format_dates, date_breaks = "1 months", expand = c(0.015, 0.015))+ 
+  geom_text(aes(label=text_labels), size=4, nudge_y = 0.02)+
+  theme(axis.text.x = element_text(angle=45,hjust=1), legend.position = "none") + 
+  labs(title = "Percentage of Overdose Events by Month among First Nations", 
+      subtitle =paste(params$start_date_label, "-", params$end_date_label), 
+       x = "Year-Month",  y = "Percentage")
+
+#ggsave(here(params$folder_loc, "prop_complete_yr.jpeg"), width=12)
+
+
+
+od_prop_join<-od_prop_complete %>% select(year_mm, FN_FLAG, proportion)
+```
+
+
+```{r}
+od_event_phn <- phn_flag_month %>% filter(phn_flag_update == "Y") %>% 
+  select(year_mm, phn_flag_update, percent) %>% 
+  left_join(od_event, by="year_mm") %>% 
+  rename(percent_phn = percent) %>% 
+  left_join(od_prop_join, by=c("year_mm", "FN_FLAG")) %>% 
+  filter(FN_FLAG ==1) %>%
+  #filter(DATE_SERVICE >= ymd("2020-06-01"))%>%
+  mutate(expected_prop_base = monthly_total*proportion, 
+         expected_ratio_base = 100/percent_phn*total)
+```
+
+```{r}
+
+pan_label <- tibble(FN_FLAG = 1, 
+                    covid_label = "Covid-19 Pandemic", 
+                    x = ymd("2020-03-01"),  
+                    y = 1.2*max(od_event_phn$expected_prop_base))
+
+
+
+od_event_phn %>% 
+  filter(year >= 2020)%>%
+  ##filter(DATE_SERVICE >= ymd("2020-06-01")) %>%
+  ##filter(year_mm >= 2020-05)%>%
+  ggplot(aes(x=year_mm, y=total,group=FN_FLAG, fill=FN_FLAG)) + 
+  geom_bar(stat="identity", position= "dodge")+
+  geom_line(aes(x=year_mm, y=expected_prop_base, color="Estimated ODs"), linetype="dashed", group=1)+
+ # geom_line(aes(x=year_mm, y=expected_ratio_base), linetype="dotted", color="magenta")+
+  geom_vline(xintercept = ymd("2020-03-01"),linetype="dotted", color = "grey", size=1)+ 
+  geom_label(data=pan_label, aes(label=covid_label, x=x, y=y), fill="white") +
+  geom_text(aes(label=total), size=4, vjust=-0.75, color="black")+
+  theme(strip.background = element_blank(),
+        strip.text.y = element_blank(), axis.text.y = element_blank())+ 
+  standards + 
+  scale_fill_manual(name=NULL, values = c("darkorange1"), labels="Linked Events")+ 
+  scale_colour_manual(name = NULL, values = c("Estimated ODs" = "red")) +
+  scale_x_date(labels = format_dates, date_breaks = "1 months", expand = c(0.015, 0.015))+
+  theme(axis.text.x = element_text(angle=45,hjust=1), 
+        plot.title = element_text(size = 16), 
+        legend.text = element_text(size=12), 
+        legend.position = "bottom", 
+        strip.background = element_blank(),
+        strip.text.y = element_blank()) + 
+  labs(title = "Number of Overdose Events (& Expected) among First Nations people by Month", 
+       subtitle = date_range_labels, 
+       x="Month", y="Total Overdoses")
+
+##ggsave(here(params$folder_loc, "fn_events_expected_events.jpeg"), width=12)
+ggsave("fn_events_expected_events.jpeg", width = 12)
+
+```
+
+```{r yearly_overdose}
+od_event_year <- bcehs2 %>%  
+  filter(year >= "2018") %>%
+  group_by(year, FN_FLAG) %>% 
+  dplyr::summarise(total=(MOH_PAT_EVENT_STUDYID = n()))
+ ############################
+```
+
+```{r crude_rates_month}
+
+###Figure 6. Crude Overdose Rate by Month
+pop <- pop <- read_csv(file="L:/Health Surveillance/HS Staff - Confidential/Opioid Overdose Crisis/Opioid Quarterly Reports/R_readin_2020.08.05_Population_File.csv")
+
+############Crude Overdose Rate
+pop <- pop %>% dplyr::rename("FNCF_MATCH" = FirstNations)
+pop <- pop %>% dplyr::mutate(FNCF_MATCH = as.character(FNCF_MATCH)) %>% filter(pop$ha_id == 6)
+
+by_month <- bcehs2 %>% #filter(year >= "2018") %>%
+   group_by(year_mm,FN_FLAG, year) %>%
+  dplyr::summarise(total_od = n()) %>%
+    mutate(percent=round((total_od/sum(total_od))*100, digits=1),
+           mm_total= sum(total_od))
+
+overdose_rate <- by_month  %>% 
+  dplyr::rename(FNCF_MATCH = FN_FLAG) %>%
+  dplyr::left_join(pop)  %>%  
+  dplyr::mutate(od_rate=round(100000*total_od/Population), digits=1)
+
+overdoselimits <- pois.approx(overdose_rate$total_od, overdose_rate$Population) %>% 
+  dplyr::mutate(LL = lower*100000, UL = upper*100000) %>% 
+  dplyr::rename(total_od = x, Population = pt)  %>%  
+  right_join(overdose_rate, by= c("total_od", "Population"))
+
+export_crude_rates <- overdoselimits %>% 
+  select(c(ha_id, ha_name, year, FNCF_MATCH, year_mm, total_od, Population, od_rate, LL, UL, conf.level))
+
+flag_dates <- seq(min(overdose_rate$year_mm), max(overdose_rate$year_mm), by = '2 month')
+export_crude_rates <- export_crude_rates %>% 
+  mutate(text_labels = ifelse(year_mm %in% flag_dates | year_mm == max(export_crude_rates$year_mm) | od_rate == max(od_rate), od_rate, NA))
+
+ggplot(export_crude_rates, aes(x=year_mm, y=od_rate, group=FNCF_MATCH, fill= FNCF_MATCH)) + 
+  geom_line(aes(color=FNCF_MATCH), size = 1.2) +
+  scale_color_manual(values = c("skyblue4", "darkorange1"), name=NULL, labels = c("Other Residents", "First Nations")) +
+  #geom_point(aes(color=FNCF_MATCH), size=0.07)+
+  #geom_text_repel(aes(label=round(od_rate, 1)), size=4)+ 
+  geom_ribbon(aes(ymin = LL, ymax = UL), alpha = 0.3, show.legend = F) +
+  scale_fill_manual("",values=c("skyblue4", "darkorange1"), guide = F) +
+  standards +
+  theme(axis.text.x = element_text(angle=45,hjust=1),
+        plot.title = element_text(size = 13.5), 
+        legend.position = "bottom")+
+  scale_x_date(labels = format_dates, date_breaks = "1 months", expand=c(0.015, 0.015))+
+  geom_vline(xintercept = ymd("2020-03-01"),linetype="dotted", color = "black", size=1)+
+    geom_label(aes(x=ymd('2020-03-01'), y = sum(max(od_rate),25), label="Covid-19 Pandemic"), fill="white")+
+    geom_text(aes(label=text_labels), size=4)+
+    labs(title = "Crude Overdose Rates among First Nations & Other Residents by Month",
+         sutitle = paste(params$start_date_label, "-", params$end_date_label), 
+         x = "Month-Year",  y = "rate per 100,000")
+ggsave("crude_rate_year.jpeg", width = 10, height = 7)
+
+
+```
+
+```{r ods_by_sex_month}
+###Figure 7. Number of Overdoses by Sex & Month 
+od_event_sex <- bcehs2 %>%  
+  dplyr::filter(PAT_GENDER != "NA") %>% filter(year >= "2020") %>%
+  dplyr::group_by(year_mm, FN_FLAG, PAT_GENDER) %>% 
+  dplyr::summarise(total= n())
+
+sex_labels <- c("0" = "Other Residents", "1" ="First Nations")
+
+flag_dates <- seq(min(od_event_sex$year_mm), max(od_event_sex$year_mm), by = '2 month')
+od_event_sex <- od_event_sex %>% 
+  mutate(text_labels = ifelse(year_mm %in% flag_dates | year_mm == max(od_event_sex$year_mm), total, NA))
+
+pan_label <- tibble(FN_FLAG = rep(c(0, 1), each=2), 
+                    PAT_GENDER = rep(c("F", "M"), 2), 
+                    covid_label = "Covid-19 Pandemic", 
+                    x = ymd("2020-03-01"), 
+                    y = ifelse(FN_FLAG== 0, 1.2*max(od_event_sex$total),
+                               1.2*max(od_event_sex$total[od_event_sex$FN_FLAG==1])))
+
+pan_label_fn<- pan_label %>% filter(FN_FLAG ==1)
+###pending colour change 
+od_event_sex %>% filter(FN_FLAG ==1) %>% 
+  ggplot(aes(x=year_mm, y=total,group=PAT_GENDER, color=PAT_GENDER)) + 
+  scale_x_date(labels = format_dates , date_breaks = "1 months", expand=c(0.015,0.015))+ 
+  geom_line(aes(color=PAT_GENDER), size = 1.2)+
+  scale_color_manual(values = c("goldenrod3", "darkslateblue"), name=NULL, labels = c("Female", "Male"))+
+  geom_vline(xintercept = ymd("2020-03-01"),linetype="dotted",  color = "black", size=1)+ 
+  geom_label(data=pan_label_fn, aes(label=covid_label, x=x, y=y), fill="white", colour="black") +
+  #geom_text(aes(label=text_labels), size=4, nudge_y = 6) +
+  geom_point(aes(color=PAT_GENDER))+ 
+    standards +
+  geom_text_repel(aes(label=total), size=4)+
+   # facet_grid(FN_FLAG~., scales ="free",labeller=labeller(FN_FLAG=sex_labels)) + 
+    theme(#strip.background = element_blank(),
+   #strip.text.y = element_blank(), 
+    axis.text.x = element_text(angle=45,hjust= 1), 
+    plot.title = element_text(size = 16), 
+    legend.position = "bottom") +
+    labs(title = "Figure 7. Number of Overdose Events among First nations by Month & Sex", 
+         subtitle = paste(params$start_date_label, "-", params$end_date_label),
+         x = "Month",  y = "Number of overdose events")
+
+`##ggsave(here(params$folder_loc, "od_events_sex_fn.jpeg"), width=12, height=7)
+ggsave("od_events_sex_fn.jpeg", width = 12)
+getwd()
+```
+
+```{r}
+by_ha_mm <- bcehs2 %>% filter(DERIVED_HA %in% c(1,2,3,4,5))%>% #filter(year >= "2018") %>%
+   group_by(year_mm,FN_FLAG,FirstNations,DERIVED_HA) %>%
+  dplyr::summarise(ha_total_od = n()) %>%
+    mutate(percent=round((ha_total_od/sum(ha_total_od))*100, digits=1),
+           ha_total= sum(ha_total_od))%>%
+   mutate(FN_names = ifelse(FN_FLAG == 0, "Other Residents", ifelse(FN_FLAG == 1, "First Natons"))) %>%
+   mutate(ha_name = ifelse(DERIVED_HA == 1, "Interior", 
+                                 ifelse(DERIVED_HA == 2, "Fraser",
+                                        ifelse(DERIVED_HA == 3, "Vancouver Coastal",
+                                               ifelse(DERIVED_HA ==4, "Vancouver Island",
+                                                      ifelse(DERIVED_HA == 5, "Northern", "Unknown"))))))
+
+flag_dates <- seq(min(by_ha_mm$year_mm), max(by_ha_mm$year_mm), by = '2 month')
+by_ha_mm <- by_ha_mm %>% 
+  mutate(text_labels = ifelse(year_mm %in% flag_dates | year_mm == max(by_ha_mm$year_mm), ha_total_od, NA))
+
+
+pan_label <- tibble(FN_FLAG = rep(c(0, 1), each=5), 
+                     ha_name = rep(c("Interior", "Fraser", "Vancouver Coastal", "Vancouver Island", "Northern"), 2), 
+                    covid_label = "Covid-19 Pandemic", 
+                    x = ymd("2020-03-01"), 
+                    y = ifelse(FN_FLAG== 0, 1.2*max(by_ha_mm$ha_total_od),
+                               1.2*max(by_ha_mm$ha_total_od[by_ha_mm$FN_FLAG==1])))
+pan_label_fn <- pan_label %>% filter(FN_FLAG ==1)
+
+ by_ha_mm %>%  #filter(year(year_mm)>=2020) %>% 
+   filter(FN_FLAG==1) %>% 
+  ggplot(aes(x=year_mm, y=ha_total_od, group=ha_name)) + 
+   scale_x_date(labels = format_dates, date_breaks = "1 months", expand = c(0.015, 0.015))+ 
+  # facet_grid(FN_FLAG~., labeller = labeller(FN_FLAG = FN_labels), scales = "free")+ 
+  geom_line(aes(color=ha_name)) + 
+   scale_colour_manual(values = c("#2C97A7", "#F04B52", "#8ACAE2", "#F57E20", "#00A14B")) +
+   geom_vline(xintercept = ymd("2020-03-01"),linetype="dotted",  color = "black", size=1)+ 
+   geom_label(data=pan_label_fn, aes(label=covid_label, x=x, y=y), fill="white") +
+    #scale_y_continuous(limits = c(0, 600), breaks = seq(0, 200, by=30)) +
+     standards +
+   theme(axis.text.x = element_text(angle=45,hjust=1), 
+         plot.title = element_text(size = 13.5), 
+         legend.position = "bottom", 
+         legend.title = element_blank())+ #geom_text(aes(label=text_labels), size=4)+
+    labs(title = "Monthly Overdose Events by Regional Health Authority", 
+         subtitle = paste(params$start_date_label, "-", params$end_date_label),
+         x = "Month-Year",  y = "Number of Overdoses")# +
+    geom_text_repel(aes(label=ha_total_od, color=ha_name), size=4)
+ 
+ ggsave(here(params$folder_loc, "od_events_ha_fn_2020.jpeg"), width=12, height=7)
+ ggsave("od_events_ha_fn_2020.jpeg", width = 12)
+
+
+ 
+```
+
+```{r ha_stack}
+ by_ha_mm %>%  filter(year(year_mm)>=2020) %>% 
+   filter(FN_FLAG==1) %>% 
+  ggplot(aes(x=year_mm, y=ha_total_od, fill=ha_name)) + 
+  # facet_grid(FN_FLAG~., labeller = labeller(FN_FLAG = FN_labels), scales = "free")+ 
+  geom_bar(stat = "identity", position = "stack")+ 
+  geom_text(aes(label=ha_total_od), position = position_stack(vjust = 0.5), size = 5) +
+   scale_fill_manual(values = c("#2C97A7", "#F04B52", "#8ACAE2", "#F57E20", "#00A14B")) +
+   geom_vline(xintercept = ymd("2020-03-01"),linetype="dotted",  color = "black", size=1)+ 
+   geom_label(data=pan_label_fn, aes(label=covid_label, x=x, y=y+150), fill="white") +
+    scale_x_date(labels = format_dates, date_breaks = "1 months", expand = c(0.015, 0.015))+ 
+    #scale_y_continuous(limits = c(0, 600), breaks = seq(0, 200, by=30)) +
+     standards +
+   theme(axis.text.x = element_text(angle=45,hjust=1), 
+         plot.title = element_text(size = 13.5), 
+         legend.position = "right", 
+         legend.title = element_blank())+ #geom_text(aes(label=text_labels), size=4)+
+    labs(title = "Monthly Overdose Events by Regional Health Authority", 
+         subtitle = paste(params$start_date_label, "-", params$end_date_label),
+         x = "Month-Year",  y = "Number of Overdoses")
+ 
+ ##ggsave(here(params$folder_loc, "od_events_ha_fn_2020.jpeg"), width=12, height=7)
+ ggsave("od_events_ha_fn_2020_vs2.jpeg", width = 12)
+
+ 
+```
+
+```{r}
+by_ha_y <- bcehs2 %>% filter(DERIVED_HA %in% c(1,2,3,4,5))%>% #filter(year >= "2018") %>%
+   group_by(year,FN_FLAG,FirstNations,DERIVED_HA, ha_name) %>%
+  dplyr::summarise(ha_total_od = n()) %>% 
+  mutate( ha_total= sum(ha_total_od), 
+          FN_names = ifelse(FN_FLAG == 0, "Other Residents", "First Nations"))
+
+#flag_dates <- seq(min(by_ha_mm$year_mm), max(by_ha_mm$year_mm), by = '4 month')
+#by_ha_mm <- by_ha_mm %>% 
+  #mutate(text_labels = ifelse(year_mm %in% flag_dates | year_mm == max(by_ha_mm$year_mm), ha_total_od, NA))
+
+pan_label <- tibble(FN_FLAG = rep(c(0, 1), each=5), ha_name = rep(c("Interior", "Fraser", "Vancouver Coastal", "Vancouver Island", "Northern"), 2), covid_label = ifelse(FN_FLAG == 0, "Covid-19 Pandemic", NA), x = ymd("2020-03-01"),  y = ifelse(FN_FLAG== 0, max(by_ha_y$ha_total_od)+50, NA))
+
+
+
+
+by_ha_y %>%
+  filter(FN_FLAG ==1) %>% 
+  ggplot(aes(year, ha_total_od, fill = ha_name)) + 
+  geom_bar(stat = "identity", position = "stack")+ 
+  scale_fill_manual(values =c("#2C97A7", "#F04B52", "#8ACAE2", "#F57E20", "#00A14B"), labels=NULL) + 
+  facet_wrap(ha_name ~. , ncol=5) + 
+  standards + 
+  geom_text(aes(label=paste0(ha_total_od)), position = position_stack(vjust = 0.9), size = 5) +
+  theme(legend.position = "right", 
+        strip.background = element_rect(fill="white"), 
+        strip.text= element_text(size = 16, color = "black", face = "bold")
+        ) +
+  #scale_y_continuous(labels = scales::percent, breaks = seq(0, 1, by = 0.25)) +
+  labs(title = "Figure 9C.2. Yearly Overdose Events by Regional Health Authority, Jan.01.2015 - Dec.31.2020",
+        x = "Year",  y = "Number of Events")
+##ggsave(here(params$folder_loc, "stack_fn_events_ha_year.jpeg"), width=14, height=7)
+ggsave("stack_fn_events_ha_year.jpeg", width = 12)
+
+```
+
+```{r}
+###Figure 10. Crude Rate by HA & Month
+pop <- pop <- read_csv(file="L:/Health Surveillance/HS Staff - Confidential/Opioid Overdose Crisis/Opioid Quarterly Reports/R_readin_2020.08.05_Population_File.csv")
+
+
+FN_labels <- c("0" = "Other Residents", "1" ="First Nations")
+############Crude Overdose Rate by HA
+pop <- pop %>% dplyr::rename("FNCF_MATCH" = FirstNations)
+pop <- pop %>% dplyr::mutate(FNCF_MATCH = as.character(FNCF_MATCH)) %>%  rename(FN_FLAG = FNCF_MATCH) 
+
+by_month_ha <- bcehs2 %>% filter(ha_name != "Unknown")%>% #filter(year >= "2018") %>%
+   group_by(year_mm, FN_FLAG, ha_name,year) %>%
+  summarise(total_od = n()) %>%
+    mutate(percent=round((total_od/sum(total_od))*100, digits=1),
+           mm_total= sum(total_od))
+
+overdose_rate_ha <- by_month_ha  %>% 
+  dplyr::left_join(pop, by =c("year", "FN_FLAG", "ha_name"))  %>%  
+  dplyr::mutate(od_rate=round(100000*total_od/Population), digits=1)
+
+overdoselimits <- pois.approx(overdose_rate_ha$total_od, overdose_rate_ha$Population) %>% 
+  dplyr::mutate(LL = lower*100000, UL = upper*100000) %>% 
+  dplyr::rename(total_od = x, Population = pt)  %>%  
+  right_join(overdose_rate_ha, by= c("total_od", "Population")) %>% 
+  mutate(fn_flag_fac = fct_relevel(FN_FLAG, "1"))
+
+
+export_crude_rates <- overdoselimits %>% 
+  select(c(ha_id, ha_name, year, FN_FLAG, fn_flag_fac, year_mm, total_od, Population, od_rate, LL, UL, conf.level))
+
+flag_dates <- seq(min(export_crude_rates$year_mm), max(export_crude_rates$year_mm), by = '2 month')
+export_crude_rates <- export_crude_rates %>% 
+  mutate(text_labels = ifelse(year_mm %in% flag_dates | year_mm == max(export_crude_rates$year_mm), od_rate, NA))
+
+export_crude_rates %>% 
+#  filter(FN_FLAG ==1 ) %>% 
+  ggplot( aes(x=year_mm, y=od_rate, group=ha_name, fill= ha_name)) + 
+  scale_x_date(labels = format_dates, date_breaks = "2 month", expand = c(0,0))+
+  geom_line(aes(color=ha_name), size = 1.2) +
+  scale_color_manual(values = c("#2C97A7", "#F04B52", "#8ACAE2", "#F57E20", "#00A14B"), name=NULL,
+                   #  labels = c("Fraser", "Interior", "Northern", "Vancouver Coastal", "Vancouver Island")
+                   )+
+  facet_wrap(ha_name ~., labeller = labeller(fn_flag_fac= FN_labels)) +
+  geom_ribbon(aes(ymin = LL, ymax = UL), alpha = 0.3, show.legend = F) +
+  scale_fill_manual("",values=c("#2C97A7", "#F04B52", "#8ACAE2", "#F57E20", "#00A14B"), guide = F) +
+  standards + 
+  theme(axis.text.x = element_text(angle=45,hjust=1),
+        plot.title = element_text(size = 16), 
+        strip.text = element_text(size=16),
+        legend.position = "bottom")+ 
+  geom_vline(xintercept = ymd("2020-03-01"),linetype="dotted",  color = "black", size=1)+ 
+  labs(title ="Crude Overdose Rates among First Nations and Other Residents by Month & Health Authority",
+  subtitle = paste(params$start_date_label, "-", params$end_date_label), 
+  x = "Month-Year",  y = "rate per 100,000")
+
+##ggsave(here(params$folder_loc, "ha_monthly_rates_facet.jpeg"), width=16, height=7)
+ggsave("ha_monthly_rates_facet.jpeg", width = 12)
+
+
+
+
+```
+```{r}
+export_crude_rates %>% 
+#  filter(FN_FLAG ==1 ) %>% 
+  ggplot( aes(x=year_mm, y=od_rate, group=fn_flag_fac, fill= fn_flag_fac)) + 
+  scale_x_date(labels = format_dates, date_breaks = "2 month", expand = c(0,0))+
+  geom_line(aes(color=fn_flag_fac), size = 1.2) +
+  scale_color_manual(values = c("darkorange1", "skyblue4"), name=NULL,
+                    labels = c("First Nations", "Other Residents")
+                   )+
+  facet_wrap(ha_name ~., labeller = labeller(fn_flag_fac= FN_labels)) +
+  geom_ribbon(aes(ymin = LL, ymax = UL), alpha = 0.3, show.legend = F) +
+  scale_fill_manual("",values = c("darkorange1", "skyblue4"), guide = F) +
+  standards + 
+  theme(axis.text.x = element_text(angle=45,hjust=1),
+        plot.title = element_text(size = 16), 
+        strip.text = element_text(size=16),
+        legend.position = "bottom")+ 
+  geom_vline(xintercept = ymd("2020-03-01"),linetype="dotted",  color = "black", size=1)+ 
+  labs(title ="Crude Overdose Rates among First Nations and Other Residents by Month & Health Authority",
+  subtitle = paste(params$start_date_label, "-", params$end_date_label), 
+  x = "Month-Year",  y = "rate per 100,000")
+
+ggsave(here(params$folder_loc, "ha_crude_monthly_rates_facet.jpeg"), width=16, height=7)
+```
+
+```{r sex_specifc_rates}
+bc_fn_pop<- read_csv(file= "L:/Health Surveillance/HS Staff - Confidential/Opioid Overdose Crisis/Opioid Quarterly Reports/2020.11.27_fn_or_age_sex_pop.csv")
+
+bc_fn_pop_tw <- bc_fn_pop %>% 
+  filter(year ==2019) %>% 
+  mutate(year =2020)
+
+bc_fn_pop_t <- bind_rows(bc_fn_pop, bc_fn_pop_tw)
+
+by_sex_pop <- bc_fn_pop_t %>% 
+  group_by(year, gender, fn_flag) %>% 
+  summarise(total_pop = sum(Population)) %>% 
+  mutate(FN_FLAG = as.character(ifelse(fn_flag == "first_nations", 1, 0))) %>% 
+  rename(PAT_GENDER = gender)
+
+od_event_sex <- od_event_sex %>% 
+  mutate(year = year(year_mm))
+
+sex_specific_rates <- od_event_sex %>% 
+  left_join(by_sex_pop, by=c("year", "PAT_GENDER", "FN_FLAG"))
+
+overdoselimits <- pois.daly(sex_specific_rates$total, sex_specific_rates$total_pop) %>% 
+  dplyr::mutate(LL = lower*100000, UL = upper*100000)
+
+sex_specific_rates_limits <- bind_cols(sex_specific_rates, overdoselimits) %>% 
+  mutate(match = ifelse(x==total & pt==total_pop, 1, 0), 
+         od_rate = 100000*rate, 
+         LL= 100000*lower, 
+         UL = 100000*upper, 
+       #  fn_flag_fac = fct_relevel(FN_FLAG, "1")
+         ) %>% 
+  filter(!is.na(fn_flag))
+
+ggplot(sex_specific_rates_limits, aes(x=year_mm, y=od_rate, group=PAT_GENDER, fill=PAT_GENDER)) + 
+  scale_x_date(labels = format_dates, date_breaks = "1 month", expand = c(0,0))+
+  geom_line(aes(color=PAT_GENDER), size = 1.2) +
+  scale_color_manual(values = c("goldenrod", "darkslateblue"), name=NULL,
+                     labels = c("Female", "Male"))+
+  facet_wrap(fn_flag ~. , labeller = labeller(fn_flag_fac= FN_labels)) +
+  geom_ribbon(aes(ymin = LL, ymax = UL), alpha = 0.3, show.legend = F) +
+  scale_fill_manual("",values=c("goldenrod", "darkslateblue"), guide = F) +
+  standards + 
+  theme(axis.text.x = element_text(angle=45,hjust=1),
+        plot.title = element_text(size = 16), 
+        strip.text = element_text(size=16),
+        legend.position = "bottom")+ 
+  geom_vline(xintercept = ymd("2020-03-01"),linetype="dotted",  color = "black", size=1)+ 
+  labs(title ="Crude Overdose Rates among First Nations and Other Residents by Month & Sex",
+  subtitle = paste(params$start_date_label, "-", params$end_date_label), 
+  x = "Month-Year",  y = "rate per 100,000")
+
+ggsave(here(params$folder_loc, "sex_monthly_crude_rates.jpeg"), width=18, height=7)
+
+
+```
+
+```{r age_specifc_rates}
+
+by_age_pop <- bc_fn_pop_t %>% 
+  mutate(age_group = ifelse(age_group_stds %in% c("<10", "10-19"), "<20", 
+                ifelse(age_group_stds %in% c("60-69", "70+"), "60+", 
+                       age_group_stds)), 
+         FN_FLAG = as.character(ifelse(fn_flag == "first_nations", 1, 0))) %>% 
+  group_by(year, FN_FLAG, fn_flag, age_group) %>% 
+  summarise(total_pop=sum(Population, na.rm=TRUE))
+
+by_age_month <- bcehs2 %>% filter(age_group != "unknown")%>%
+  mutate(year_qq = floor_date(DATE_SERVICE, unit="quarter")) %>% 
+   dplyr::group_by(year, year_qq,FN_FLAG,age_group) %>%
+   dplyr::summarise(total = n())
+
+by_age_yr <- bcehs2 %>% filter(age_group != "unknown")%>%
+  mutate(year_qq = floor_date(DATE_SERVICE, unit="quarter")) %>% 
+   dplyr::group_by(year, FN_FLAG,age_group) %>%
+   dplyr::summarise(total = n())
+
+age_sp_rates <- by_age_yr %>% 
+  left_join(by_age_pop, by=c("year", "age_group", "FN_FLAG"))
+
+overdoselimits_age <- pois.daly(age_sp_rates$total, age_sp_rates$total_pop) %>% 
+  dplyr::mutate(LL = lower*100000, UL = upper*100000)
+
+age_sp_rates_limits <- bind_cols(age_sp_rates, overdoselimits_age) %>% 
+  mutate(match = ifelse(x==total & pt==total_pop, 1, 0), 
+         od_rate = 100000*rate, 
+         LL= 100000*lower, 
+         UL = 100000*upper, 
+       #  fn_flag_fac = fct_relevel(FN_FLAG, "1")
+         )  %>% 
+  filter(age_group != "Unknown" & year <params$current_year)
+
+ggplot(age_sp_rates_limits, aes(x=as.character(year), y=od_rate, group=age_group, fill=age_group)) + 
+ # scale_x_date(labels = format_dates_q, date_breaks = "3 month", expand = c(0,0))+
+  geom_line(aes(color=age_group), size = 1.2) +
+  scale_color_viridis(discrete = T)+
+  facet_wrap(fn_flag ~. , labeller = labeller(fn_flag_fac= FN_labels)) +
+ geom_ribbon(aes(ymin = LL, ymax = UL), alpha = 0.15, show.legend = F) +
+  scale_fill_viridis(discrete=T) +
+  standards + 
+  theme(axis.text.x = element_text(angle=45,hjust=1),
+        plot.title = element_text(size = 16), 
+        strip.text = element_text(size=16),
+        legend.position = "bottom")+ 
+  #geom_vline(xintercept = ymd("2020-03-01"),linetype="dotted",  color = "black", size=1)+ 
+  labs(title ="Crude Overdose Rates among First Nations and Other Residents by Month & Age_Group",
+  subtitle = paste(params$start_date_label, "-", params$end_date_label), 
+  x = "Year",  y = "rate per 100,000")
+ 
+ 
+ggsave(here(params$folder_loc, "age_yearly_rates.jpeg"), width=18, height=7)
+
+
+```
+
+```{r}
+tester_pre <- tbl(dbhandle, in_schema("dbo", "BCEHS_backup20210219"))
+bcehs_pre18_tb <- as_tibble(tester_pre) %>%  
+  filter(year(ymd(DATE_SERVICE)) < 2018) %>% 
+  filter(PAT_EVENT_INDEX ==1 & OD_GROUP == "Probable_OD_opioid")
+by_year_pre18 <- bcehs_pre18_tb %>% 
+  mutate(year = year(ymd(DATE_SERVICE))) %>% 
+  group_by(year, FN_FLAG) %>% 
+  summarise(total_od=n())
+
+by_year_post18 <- bcehs2 %>% #filter(year >= "2018") %>%
+   group_by(year, FN_FLAG) %>%
+  summarise(total_od = n()) #%>%
+   # mutate(percent=round((total_od/sum(total_od))*100, digits=1),
+    #       mm_total= sum(total_od))
+
+by_year <- bind_rows(by_year_pre18, by_year_post18)
+
+bc_pop <- filter(pop,ha_id == 6)
+
+overdose_rate_year <- by_year  %>% 
+  dplyr::left_join(bc_pop, by =c("year","FN_FLAG"))  %>%  
+  dplyr::mutate(od_rate=100000*total_od/Population)
+
+overdoselimits <- pois.approx(overdose_rate_year$total_od, overdose_rate_year$Population) %>% 
+  dplyr::mutate(LL = lower*100000, UL = upper*100000) %>% 
+  dplyr::rename(total_od = x, Population = pt)  %>%  
+  right_join(overdose_rate_year, by= c("total_od", "Population"))
+
+export_crude_rates <- overdoselimits %>% 
+  select(c(ha_id, year, FN_FLAG, year, total_od, Population, od_rate, LL, UL, conf.level))
+
+
+ggplot(export_crude_rates, aes(x=as.character(year), y=od_rate, group=FN_FLAG, fill=FN_FLAG)) + 
+  geom_line(aes(color=FN_FLAG), size = 1.2) + 
+  scale_color_manual(values = c("skyblue4", "darkorange1"), name=NULL, labels = c("Other Residents", "First Nations")) + 
+  #facet_grid(FN_FLAG~., scales = "free",labeller = labeller(FN_FLAG = FN_labels)) +
+  #geom_point(aes(color=FNCF_MATCH), size=0.07)+
+  geom_text_repel(aes(label=round(od_rate, 1)), size=4)+ 
+  geom_ribbon(aes(ymin = LL, ymax = UL), alpha = 0.3, show.legend = F) +
+  #scale_x_date(labels =format_dates, date_breaks = "1 years")+
+  scale_fill_manual("",values=c("skyblue4", "darkorange1"), guide = F)+
+  standards+ 
+  theme(legend.position = "bottom") +
+  labs(title ="Crude Overdose Rates among First Nations & Other Residents by Year", 
+       subtitle = paste(params$start_date_label, "-", params$end_date_label),
+       x = "Year",  y = "rate per 100,000")
+
+ggsave(here(params$folder_loc, "yearly_rates.jpeg"), width=10)
+
+```
+
+
+```{r add_geography_lookup}
+band_lookup <- read_csv(file = "L:/Health Surveillance/Health Surveillance - General/lookup_files/r_readin_final_lookup_geography.csv")
+lha18 <- band_lookup %>% 
+  select(lha_2018, lha_name_2018, hsda_name, ha_name) %>% 
+  dplyr::rename("DERIVED_LHA" = lha_2018) %>% unique()
+
+###
+bcehs_geo <- bcehs2 %>% left_join(lha18, by="DERIVED_LHA")
+
+```
+
+```{r lha_by_year}
+od_event_lha2 <- bcehs_geo %>% 
+   group_by(FN_FLAG, year,ha_name.x, DERIVED_LHA, lha_name_2018) %>%
+  dplyr::summarise(total= n())
+
+lha_out <- od_event_lha2  %>% 
+    unite(temp, year, FN_FLAG) %>% 
+    pivot_wider(names_from = temp,
+                values_from = total, 
+                values_fill = 0) %>% 
+  arrange(desc(`2020_1`)) %>% 
+  mutate(`2020_2019_per_change` = round(100*(`2020_1` - `2019_1`)/`2019_1`, digits=1 ))
+
+write.csv(lha_out, here(params$folder_loc,  "od_event_lhas.csv"))
+write_csv(lha_out, "L://Health Surveillance//HS Staff - Confidential//Opioid Overdose Crisis//BCEHS SURVEILLANCE//od_event_lhas.csv")
+
+          
+          
+          path = here(folder_year, folder, "od_event_lhas.csv"))
+getwd()
+```
+
+```{r hsda_by_year}
+od_event_hsda <- bcehs_geo %>% 
+   group_by(FN_FLAG, year, DERIVED_HA, DERIVED_HSDA, hsda_name) %>%
+  dplyr::summarise(total= n())
+
+
+od_event_hsda_wide <- od_event_hsda%>% 
+   unite(temp, year, FN_FLAG) %>% 
+    pivot_wider(names_from = temp,
+                values_from = total, 
+                values_fill = 0) %>% 
+  arrange(desc(`2020_1`)) %>% 
+  mutate(`2020_2019_per_change` = round(100*(`2020_1` - `2019_1`)/`2019_1`, digits=1 ))
+od_event$FN_FLAG<- fct_relevel(od_event$FN_FLAG, "1", "0")
+
+
+write.csv(od_event_hsda_wide, "L:\\Health Surveillance\\HS Staff - Confidential\\Opioid Overdose Crisis\\BCEHS SURVEILLANCE\\2021.05\\hsda_only_year.csv")
+
+```
+
